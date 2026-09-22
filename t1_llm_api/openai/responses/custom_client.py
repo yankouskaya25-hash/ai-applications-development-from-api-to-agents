@@ -35,25 +35,30 @@ class CustomOpenAIResponsesClient(BaseOpenAIClient):
             Uses the Responses API format with 'instructions' and 'input' parameters.
             The response is printed to stdout before being returned.
         """
-        #TODO:
-        # https://developers.openai.com/api/docs/guides/text?lang=curl
-        # 0. Make a request in Postman to see the request and response
-        # 1. Prepare headers dict with:
-        #   - "Authorization" (self api key)
-        #   - "Content-Type" ("application/json")
-        # 2. Prepare input messages list: `input_messages = [message.to_dict() for message in messages]`
-        # 3. Prepare request data dict:
-        #   - "model" (self model_name)
-        #   - "instructions" (self system_prompt)
-        #   - "input" (input_messages)
-        # 4. Execute post request to AI API `requests.post(url=self._endpoint, headers=headers, json=request_data)`
-        # 5.1. If response status code is 200 then:
-        #   - get response json
-        #   - get content using self._extract_output_text(data)
-        #   - print content
-        #   - return ASSISTANT message (role assistant, content is generated content)
-        # 5.2. Otherwise raise Exception(f"HTTP {response.status_code}: {response.text}")
-        raise NotImplementedError
+
+        headers = {"Content-Type": "application/json", "Authorization": self._api_key}
+
+        input_data = [message.to_dict() for message in messages]
+
+        body = {
+            "model": self._model_name,
+            "input": input_data,
+            "instructions": self._system_prompt,
+        }
+
+        url = self._endpoint + "/responses"
+
+        response = requests.post(headers=headers, json=body, url=url)
+
+        if response.status_code == 200:
+            data = response.json()
+
+            content = self._extract_output_text(data)
+
+            print(f"Assistant: {content}")
+            return Message(role=Role.ASSISTANT, content=content)
+        else:
+            raise Exception(f"HTTP {response.status_code}: {response.text}")
 
     async def stream_response(self, messages: list[Message], **kwargs) -> Message:
         """
@@ -74,7 +79,48 @@ class CustomOpenAIResponsesClient(BaseOpenAIClient):
             Listens for 'response.output_text.delta' events to build the response.
             Each line with "event: " specifies the event type, followed by "data: " with the payload.
         """
-        #TODO:
+
+        headers = {"Content-Type": "application/json", "Authorization": self._api_key}
+
+        input_data = [message.to_dict() for message in messages]
+
+        body = {
+            "model": self._model_name,
+            "input": input_data,
+            "stream": True,
+            "instruction": self._system_prompt,
+        }
+
+        url = self._endpoint + "/responses"
+
+        content = []
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url=url, headers=headers, json=body) as response:
+                if response.status == 200:
+                    async for line in response.content:
+                        line_str = line.decode("utf-8").strip()
+                        if line_str.startswith("event: "):
+                            event_type = line_str[7:].strip()
+                        elif (
+                            line_str.startswith("data: ")
+                            and event_type == "response.output_text.delta"
+                        ):
+                            data = json.loads(line_str[6:])
+                            delta = data.get("delta", "")
+
+                            if delta:
+                                print(delta, end="")
+                                content.append(delta)
+                        elif line_str == "":
+                            event_type = None
+                    print("")
+                    return Message(role=Role.ASSISTANT, content="".join(content))
+                else:
+                    error_text = await response.text()
+                    print(f"{response.status} {error_text}")
+                    raise Exception(f"HTTP {response.status}: {error_text}")
+        # TODO:
         # https://developers.openai.com/api/docs/guides/text?lang=curl
         # 0. Make a request in Postman to see the request and response
         # 1. Prepare headers dict with:
@@ -127,7 +173,17 @@ class CustomOpenAIResponsesClient(BaseOpenAIClient):
         Raises:
             ValueError: If no output text is found in the response structure.
         """
-        #TODO:
+
+        output = data.get("output", [])
+
+        for item in output:
+            if item.get("type") == "message":
+                for content_part in item.get("content", []):
+                    if content_part.get("type") == "output_text":
+                        return content_part.get("text", "")
+
+        raise ValueError("No output text found in the response")
+        # TODO:
         # 1. Get output list from data: `output = data.get("output", [])`
         # 2. Iterate through items in output:
         #   - if item.get("type") == "message":
@@ -135,4 +191,3 @@ class CustomOpenAIResponsesClient(BaseOpenAIClient):
         #           - if content_part.get("type") == "output_text":
         #               - return content_part.get("text", "")
         # 3. If no output text found, raise ValueError("No output text found in the response")
-        raise NotImplementedError

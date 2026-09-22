@@ -35,7 +35,34 @@ class CustomOpenAIClient(BaseOpenAIClient):
             The system prompt is automatically prepended to the messages.
             The response is printed to stdout before being returned.
         """
-        #TODO:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": self._api_key,
+        }
+
+        messages_dicts = [
+            {"role": Role.SYSTEM, "content": self._system_prompt},
+            *[message.to_dict() for message in messages],
+        ]
+
+        body = {"model": self._model_name, "messages": messages_dicts}
+
+        response = requests.post(url=self._endpoint, headers=headers, json=body)
+
+        if response.status_code == 200:
+            response_json = response.json()
+            choices = response_json.get("choices", [])
+
+            if choices:
+                content = choices[0].get("message", {}).get("content")
+                print(f"Assistant: {content}")
+                return Message(role=Role.ASSISTANT, content=content)
+            else:
+                raise ValueError("No Choice has been present in the response")
+        else:
+            raise Exception(f"HTTP {response.status_code}: {response.text}")
+
+        # TODO:
         # https://platform.openai.com/docs/api-reference/chat
         # 0. Make a request in Postman to see the request and response
         # 1. Prepare headers dict with:
@@ -57,7 +84,6 @@ class CustomOpenAIClient(BaseOpenAIClient):
         #       - return ASSISTANT message (role assistant, content is generated content)
         #   - raise ValueError("No Choice has been present in the response")
         # 5.2. Otherwise raise Exception(f"HTTP {response.status_code}: {response.text}")
-        raise NotImplementedError
 
     async def stream_response(self, messages: list[Message], **kwargs) -> Message:
         """
@@ -78,7 +104,43 @@ class CustomOpenAIClient(BaseOpenAIClient):
             Each token is printed to stdout as it arrives.
             Uses Server-Sent Events (SSE) format where each line starts with "data: ".
         """
-        #TODO:
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": self._api_key,
+        }
+
+        messages_dicts = [
+            {"role": Role.SYSTEM, "content": self._system_prompt},
+            *[message.to_dict() for message in messages],
+        ]
+
+        body = {"model": self._model_name, "messages": messages_dicts, "stream": True}
+
+        content = []
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url=self._endpoint, headers=headers, json=body
+            ) as response:
+                if response.status == 200:
+                    async for line in response.content:
+                        line_str = line.decode("utf-8").strip()
+                        if line_str.startswith("data: "):
+                            data = line_str[6:].strip()
+
+                            if data != "[DONE]":
+                                content_snippet = self._get_content_snippet(data)
+                                print(content_snippet, end="")
+                                content.append(content_snippet)
+                    print("")
+                    return Message(role=Role.ASSISTANT, content="".join(content))
+                else:
+                    error_text = await response.text()
+                    print(f"{response.status} {error_text}")
+                    raise Exception(f"HTTP {response.status}: {error_text}")
+
+        # TODO:
         # https://platform.openai.com/docs/api-reference/chat
         # 0. Make a request in Postman to see the request and response
         # 1. Prepare headers dict with:
@@ -110,7 +172,6 @@ class CustomOpenAIClient(BaseOpenAIClient):
         #   - get error text: `error_text = await response.text()`
         #   - print error: f"{response.status} {error_text}"
         # 8. Return AI message with joined contents: `Message(role=Role.AI, content=''.join(contents))`
-        raise NotImplementedError
 
     def _get_content_snippet(self, data: str) -> str:
         """
@@ -124,11 +185,10 @@ class CustomOpenAIClient(BaseOpenAIClient):
         Returns:
             str: The content text from the chunk, or empty string if no content.
         """
-        #TODO:
-        # 1. Parse JSON data: `data = json.loads(data)`
-        # 2. Get choices from data: `choices = data.get("choices")`
-        # 3. If choices exist (use walrus operator: `if choices := data.get("choices"):`):
-        #   - get delta from first choice: `delta = choices[0].get("delta", {})`
-        #   - return content from delta: `delta.get("content", '')`
-        # 4. Otherwise return empty string
-        raise NotImplementedError
+
+        data = json.loads(data)
+
+        if choices := data.get("choices"):
+            delta = choices[0].get("delta", {})
+            return delta.get("content", "")
+        return ""

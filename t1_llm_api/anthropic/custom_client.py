@@ -36,7 +36,44 @@ class CustomAnthropicAIClient(AIClient):
             Claude's API returns content as an array of content blocks.
             The response is printed to stdout before being returned.
         """
-        #TODO:
+
+        headers = {
+            "x-api-key": self._api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+
+        body = {
+            "model": self._model_name,
+            "system": self._system_prompt,
+            "max_tokens": 1024,
+            "stream": False,
+            "messages": [message.to_dict() for message in messages],
+        }
+
+        response = requests.post(
+            url=self._endpoint + "/v1/messages", headers=headers, json=body
+        )
+
+        print(response.status_code)
+        print(response.text)
+
+        if response.status_code == 200:
+            data = response.json()
+            content_blocks = data.get("content", [])
+
+            if content_blocks:
+                content = "".join(
+                    block.get("text", "")
+                    for block in content_blocks
+                    if block.get("type") == "text"
+                )
+
+                print(f"Assistant: {content}")
+                return Message(role=Role.ASSISTANT, content=content)
+
+        raise ValueError("No content blocks present in the response")
+        # TODO:
         # https://platform.claude.com/docs/en/build-with-claude/working-with-messages
         # 0. Make a request in Postman to see the request and response
         # 1. Prepare headers dict with:
@@ -58,29 +95,79 @@ class CustomAnthropicAIClient(AIClient):
         #       - return ASSISTANT message (role assistant, content is generated content)
         #   - raise ValueError("No content blocks present in the response")
         # 4.2. Otherwise raise Exception(f"HTTP {response.status_code}: {response.text}")
-        raise NotImplementedError
 
-    async def stream_response(self, messages: list[Message], **kwargs) -> Message:
-        """
-        Get a streaming response using raw HTTP with Server-Sent Events (SSE).
+    async def stream_response(
+        self,
+        messages: list[Message],
+        **kwargs,
+    ) -> Message:
+        headers = {
+            "x-api-key": self._api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
 
-        The response is streamed using Anthropic's SSE format, with text deltas
-        printed immediately as they arrive.
+        body = {
+            "model": self._model_name,
+            "system": self._system_prompt,
+            "max_tokens": kwargs.get("max_tokens", 1024),
+            "stream": True,
+            "messages": [message.to_dict() for message in messages],
+        }
 
-        Args:
-            messages (list[Message]): The conversation history.
-            **kwargs: Additional parameters like max_tokens (default: 1024).
+        contents = []
 
-        Returns:
-            Message: The complete AI response message after all deltas are received.
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url=self._endpoint + "/v1/messages",
+                headers=headers,
+                json=body,
+            ) as response:
 
-        Note:
-            Uses Server-Sent Events (SSE) format where each line starts with "data: ".
-            Listens for 'content_block_delta' events with 'text_delta' type.
-            Stops processing when 'message_stop' event is received.
-            Each delta is printed to stdout as it arrives.
-        """
-        #TODO:
+                if response.status == 200:
+                    async for line in response.content:
+                        line_str = line.decode("utf-8").strip()
+
+                        if not line_str.startswith("data: "):
+                            continue
+
+                        data = line_str[6:].strip()
+
+                        if not data:
+                            continue
+
+                        try:
+                            parsed_data = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+
+                        event_type = parsed_data.get("type")
+
+                        if event_type == "content_block_delta":
+                            delta = parsed_data.get("delta", {})
+
+                            if delta.get("type") == "text_delta":
+                                text_content = delta.get("text", "")
+
+                                if text_content:
+                                    print(text_content, end="")
+                                    contents.append(text_content)
+
+                        elif event_type == "message_stop":
+                            break
+
+                else:
+                    error_text = await response.text()
+                    print(f"{response.status} {error_text}")
+                    raise Exception(f"HTTP {response.status}: {error_text}")
+
+        print()
+
+        return Message(
+            role=Role.ASSISTANT,
+            content="".join(contents),
+        )
+        # TODO:
         # https://platform.claude.com/docs/en/build-with-claude/streaming
         # 0. Make a request in Postman to see the request and response
         # 1. Prepare headers dict with:
@@ -116,4 +203,3 @@ class CustomAnthropicAIClient(AIClient):
         #   - print error: f"{response.status} {error_text}"
         # 7. Print empty line (for formatting)
         # 8. Return ASSISTANT message with joined contents: `Message(role=Role.ASSISTANT, content=''.join(contents))`
-        raise NotImplementedError

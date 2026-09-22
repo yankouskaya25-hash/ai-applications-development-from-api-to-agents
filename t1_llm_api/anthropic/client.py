@@ -18,7 +18,9 @@ class AnthropicAIClient(AIClient):
         Inherits all other attributes from AIClient.
     """
 
-    def __init__(self, endpoint: str, model_name: str, api_key: str, system_prompt: str):
+    def __init__(
+        self, endpoint: str, model_name: str, api_key: str, system_prompt: str
+    ):
         """
         Initialize the Anthropic client with SDK.
 
@@ -28,31 +30,36 @@ class AnthropicAIClient(AIClient):
             api_key (str): The Anthropic API key for authentication.
             system_prompt (str): The system instruction to guide Claude's behavior.
         """
-        #TODO:
+
+        super().__init__(endpoint, model_name, api_key, system_prompt)
+        self._client = Anthropic(api_key=api_key, base_url=endpoint)
+        self._async_client = AsyncAnthropic(api_key=api_key, base_url=endpoint)
+        # TODO:
         # 1. Call to __init__ of super class
         # 2. Add self._client = Anthropic(api_key=api_key)
         # 3. Add self._async_client = AsyncAnthropic(api_key=api_key)
         # Add Anthropic and AsyncAnthropic clients https://github.com/anthropics/anthropic-sdk-python (In readme you can find
         # samples with both of these clients)
-        raise NotImplementedError
 
     def response(self, messages: list[Message], **kwargs) -> Message:
-        """
-        Get a synchronous response from Anthropic's Claude API.
+        message = self._client.messages.create(
+            max_tokens=kwargs.get("max_tokens", 1024),
+            messages=[msg.to_dict() for msg in messages],
+            model=self._model_name,
+            system=self._system_prompt,
+        )
 
-        Args:
-            messages (list[Message]): The conversation history.
-            **kwargs: Additional parameters like max_tokens (default: 1024).
+        content = "".join(
+            block.text for block in message.content if block.type == "text"
+        )
 
-        Returns:
-            Message: The AI's response message.
+        print(f"Assistant: {content}")
 
-        Note:
-            Claude's API uses a separate 'system' parameter for system instructions.
-            Response content blocks are concatenated into a single text response.
-            The response is printed to stdout before being returned.
-        """
-        #TODO:
+        return Message(
+            role=Role.ASSISTANT,
+            content=content,
+        )
+        # TODO:
         # 0. Make a request in Postman to see the request and response
         # 1. Call client, use `self._client.messages.create` with such params:
         #   - system=self._system_prompt
@@ -62,27 +69,38 @@ class AnthropicAIClient(AIClient):
         # 2. Iterate through response content and if content type is `text` then concat it
         # 3. Print content to console
         # 4. Return ASSISTANT message (role assistant, content is generated content)
-        raise NotImplementedError
 
-    async def stream_response(self, messages: list[Message], **kwargs) -> Message:
-        """
-        Get a streaming response from Anthropic's Claude API.
+    async def stream_response(
+        self,
+        messages: list[Message],
+        **kwargs,
+    ) -> Message:
+        stream = await self._async_client.messages.create(
+            max_tokens=kwargs.get("max_tokens", 1024),
+            messages=[msg.to_dict() for msg in messages],
+            model=self._model_name,
+            system=self._system_prompt,
+            stream=True,
+        )
 
-        The response is streamed using event-based streaming, with text deltas
-        printed immediately as they arrive.
+        contents = []
 
-        Args:
-            messages (list[Message]): The conversation history.
-            **kwargs: Additional parameters like max_tokens (default: 1024).
+        async for chunk in stream:
+            if chunk.type == "content_block_delta":
+                if hasattr(chunk, "delta") and hasattr(chunk.delta, "text"):
+                    delta_content = chunk.delta.text or ""
 
-        Returns:
-            Message: The complete AI response message after all deltas are received.
+                    if delta_content:
+                        print(delta_content, end="")
+                        contents.append(delta_content)
 
-        Note:
-            Listens for 'content_block_delta' events with text deltas.
-            Each delta is printed to stdout as it arrives for real-time display.
-        """
-        #TODO:
+        print()
+
+        return Message(
+            role=Role.ASSISTANT,
+            content="".join(contents),
+        )
+        # TODO:
         # 0. Make a request in Postman to see the request and response
         # 1. Call client, use `await self._async_client.messages.create` with such params:
         #   - system=self._system_prompt
